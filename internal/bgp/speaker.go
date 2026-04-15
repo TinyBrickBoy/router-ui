@@ -32,20 +32,11 @@ type SpeakerConfig struct {
 	// Set to "" to disable automatic FIB management.
 	WGInterface string
 
-	// NodeASNRange, if set, limits kernel-route injection to paths whose
-	// AS-PATH origin falls within [Min, Max]. Paths from outside this range
-	// (e.g. upstream transit routes) are not injected.
-	NodeASNRange *ASNRange
-}
-
-// ASNRange is an inclusive range of private ASNs assigned to edge nodes.
-type ASNRange struct {
-	Min, Max uint32
-}
-
-// Contains reports whether asn is in the range.
-func (r *ASNRange) Contains(asn uint32) bool {
-	return asn >= r.Min && asn <= r.Max
+	// WGPeerRange is the WireGuard management CIDR (e.g. "10.100.0.0/24").
+	// Only BGP paths whose NEXT_HOP falls within this range are injected into
+	// the kernel FIB. This filters out upstream/transit routes while accepting
+	// all node-originated prefixes, regardless of ASN (supports single-ASN iBGP).
+	WGPeerRange string
 }
 
 // Speaker embeds a GoBGP server and exposes a simplified routing API.
@@ -318,35 +309,30 @@ func (s *Speaker) handleBestPath(path *api.Path) {
 		return
 	}
 
-	// Decode next-hop.
+	// Decode next-hop from path attributes.
 	var nextHop net.IP
-	var originASN uint32
 	for _, a := range path.Pattrs {
 		var nh api.NextHopAttribute
 		if err := a.UnmarshalTo(&nh); err == nil {
 			nextHop = net.ParseIP(nh.NextHop).To4()
-			continue
+			break
 		}
-		var asp api.AsPathAttribute
-		if err := a.UnmarshalTo(&asp); err == nil {
-			// Last segment's last ASN is the origin.
-			if len(asp.Segments) > 0 {
-				seg := asp.Segments[len(asp.Segments)-1]
-				if len(seg.Numbers) > 0 {
-					originASN = seg.Numbers[len(seg.Numbers)-1]
-				}
-			}
-		}
-	}
-
-	// Only install routes from node peers (filter by ASN range).
-	if s.cfg.NodeASNRange != nil && !s.cfg.NodeASNRange.Contains(originASN) {
-		return
 	}
 
 	if nextHop == nil {
 		s.log.Warn("FIB: no next-hop in best path", zap.String("prefix", cidr.String()))
 		return
+	}
+
+	// Filter: only inject routes whose next-hop is in the WireGuard peer range.
+	// This works correctly for single-ASN (iBGP) deployments because we
+	// distinguish node routes by next-hop IP, not by ASN.
+	// Upstream/transit routes have next-hops outside the WG range and are skipped.
+	if s.cfg.WGPeerRange != "" {
+		_, wgNet, err := net.ParseCIDR(s.cfg.WGPeerRange)
+		if err == nil && !wgNet.Contains(nextHop) {
+			return // not a node route — skip FIB injection
+		}
 	}
 
 	if err := s.installKernelRoute(cidr, nextHop); err != nil {

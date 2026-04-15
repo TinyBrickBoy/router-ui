@@ -60,10 +60,7 @@ func run(cfgPath string) error {
 	log := buildLogger(cfg.LogLevel)
 	defer func() { _ = log.Sync() }()
 
-	log.Info("bgpd-agent starting",
-		zap.String("node_id", cfg.NodeID),
-		zap.Uint32("asn", cfg.ASN),
-	)
+	log.Info("bgpd-agent starting", zap.String("node_id", cfg.NodeID))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -142,8 +139,9 @@ func run(cfgPath string) error {
 	log.Info("WireGuard tunnel configured", zap.String("core_wg_ip", regResp.CoreWGIP))
 
 	// ── BGP speaker ───────────────────────────────────────────────────────────
+	// Use the core's ASN (= our shared ASN): same ASN on both sides → iBGP.
 	speaker := bgp.NewSpeaker(bgp.SpeakerConfig{
-		ASN:        cfg.ASN,
+		ASN:        regResp.BGPPeerASN, // shared ASN returned by core
 		RouterID:   regResp.WGIP,
 		ListenAddr: regResp.WGIP,
 		ListenPort: 179,
@@ -248,7 +246,6 @@ func doRegister(url string, cfg *config.AgentConfig, pubKey wgtypes.Key) (*apity
 	}
 	body, _ := json.Marshal(apitypes.RegisterRequest{
 		NodeID:      cfg.NodeID,
-		ASN:         cfg.ASN,
 		PublicIP:    cfg.WireGuard.PublicIP,
 		WGPort:      wgPort,
 		WGPublicKey: pubKey.String(),

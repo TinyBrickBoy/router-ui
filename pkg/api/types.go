@@ -8,12 +8,13 @@ import "time"
 // ─── Registration ─────────────────────────────────────────────────────────────
 
 // RegisterRequest is sent by a node agent to join the routing fabric.
+// With single-ASN (iBGP) deployments the node does not specify its own ASN —
+// the core assigns the shared ASN and returns it in RegisterResponse.BGPPeerASN.
 type RegisterRequest struct {
-	NodeID      string `json:"node_id"`       // unique node name
-	ASN         uint32 `json:"asn"`            // node's private ASN
-	PublicIP    string `json:"public_ip"`      // node's public IP (WG endpoint)
-	WGPort      int    `json:"wg_port"`        // WireGuard listen port
-	WGPublicKey string `json:"wg_public_key"`  // base64-encoded WG public key
+	NodeID      string `json:"node_id"`      // unique node name
+	PublicIP    string `json:"public_ip"`    // node's public IP (WG endpoint)
+	WGPort      int    `json:"wg_port"`      // WireGuard listen port
+	WGPublicKey string `json:"wg_public_key"` // base64-encoded WG public key
 }
 
 // RegisterResponse is returned by the core after a successful registration.

@@ -5,7 +5,6 @@
 log_level: info
 
 node_id: "node3"
-asn: 65003
 
 core:
   public_ip: "YOUR_CORE_PUBLIC_IP"
@@ -14,10 +13,10 @@ core:
 
 wireguard:
   interface: "wg0"
-  public_ip: "YOUR_NODE3_PUBLIC_IP"  # e.g. 203.0.113.138
+  public_ip: "YOUR_NODE3_PUBLIC_IP"
   listen_port: 51820
   mtu: 1420
-  private_key: ""   # generated on first run
+  private_key: ""
 
 bgp:
   hold_time: 90

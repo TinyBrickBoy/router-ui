@@ -41,10 +41,11 @@ type Callbacks struct {
 }
 
 // Node is the live runtime record of an edge node.
+// ASN is always the shared core ASN (iBGP: all speakers use the same ASN).
 type Node struct {
 	// Identity
 	ID  string
-	ASN uint32
+	ASN uint32 // = coreASN (set automatically; not provided by the node)
 
 	// Network
 	PublicIP    net.IP
@@ -237,8 +238,8 @@ func (r *Registry) handleRegister(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	if regReq.NodeID == "" || regReq.ASN == 0 || regReq.PublicIP == "" || regReq.WGPublicKey == "" {
-		jsonError(w, "missing required fields: node_id, asn, public_ip, wg_public_key", http.StatusBadRequest)
+	if regReq.NodeID == "" || regReq.PublicIP == "" || regReq.WGPublicKey == "" {
+		jsonError(w, "missing required fields: node_id, public_ip, wg_public_key", http.StatusBadRequest)
 		return
 	}
 
@@ -277,7 +278,7 @@ func (r *Registry) handleRegister(w http.ResponseWriter, req *http.Request) {
 
 	node := &Node{
 		ID:            regReq.NodeID,
-		ASN:           regReq.ASN,
+		ASN:           r.coreASN, // iBGP: all nodes share the core's ASN
 		PublicIP:      net.ParseIP(regReq.PublicIP),
 		WGPort:        regReq.WGPort,
 		WGPublicKey:   pubKey,
@@ -307,9 +308,9 @@ func (r *Registry) handleRegister(w http.ResponseWriter, req *http.Request) {
 		// Don't fail the registration — WG peer can be re-added on next heartbeat.
 	}
 
-	// Add BGP peer (session will establish once WireGuard tunnel is up).
+	// Add BGP peer. Same ASN on both sides → iBGP session.
 	go func() {
-		if err := r.bgpSpeaker.AddPeer(context.Background(), wgIP.String(), regReq.ASN); err != nil {
+		if err := r.bgpSpeaker.AddPeer(context.Background(), wgIP.String(), r.coreASN); err != nil {
 			r.log.Error("Failed to add BGP peer", zap.String("node_id", regReq.NodeID), zap.Error(err))
 		}
 		if r.callbacks.OnNodeUp != nil {

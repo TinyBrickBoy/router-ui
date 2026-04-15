@@ -136,9 +136,10 @@ func validateCoreConfig(c *CoreConfig) error {
 // ─── Node agent ──────────────────────────────────────────────────────────────
 
 // AgentConfig is the top-level configuration for bgpd-agent.
+// With single-ASN iBGP, the ASN is returned by the core during registration
+// and does NOT need to be set here.
 type AgentConfig struct {
 	NodeID            string               `mapstructure:"node_id"`
-	ASN               uint32               `mapstructure:"asn"`
 	Core              CoreConnectionConfig `mapstructure:"core"`
 	WireGuard         AgentWGConfig        `mapstructure:"wireguard"`
 	BGP               AgentBGPConfig       `mapstructure:"bgp"`
@@ -197,9 +198,6 @@ func setAgentDefs(v *viper.Viper) {
 func validateAgentConfig(c *AgentConfig) error {
 	if c.NodeID == "" {
 		return fmt.Errorf("node_id must be set")
-	}
-	if c.ASN == 0 {
-		return fmt.Errorf("asn must be set")
 	}
 	if c.Core.PublicIP == "" {
 		return fmt.Errorf("core.public_ip must be set")

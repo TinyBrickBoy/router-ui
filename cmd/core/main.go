@@ -27,8 +27,10 @@ import (
 	"github.com/tinybrickboy/router-ui/internal/health"
 	"github.com/tinybrickboy/router-ui/internal/registry"
 	"github.com/tinybrickboy/router-ui/internal/subnet"
+	"github.com/tinybrickboy/router-ui/internal/webui"
 	"github.com/tinybrickboy/router-ui/internal/wireguard"
 	"github.com/tinybrickboy/router-ui/pkg/config"
+	"github.com/tinybrickboy/router-ui/web"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )
@@ -112,7 +114,9 @@ func run(cfgPath string) error {
 		HoldTime:    cfg.BGP.HoldTime,
 		Keepalive:   cfg.BGP.Keepalive,
 		WGInterface: cfg.WireGuard.Interface,
-		NodeASNRange: &bgp.ASNRange{Min: 65001, Max: 65534},
+		// Single-ASN (iBGP): filter FIB injection by WireGuard peer IP range,
+		// not by ASN (all nodes share the core's ASN).
+		WGPeerRange: cfg.Network.WGPeerRange,
 	}, log.Named("bgp"))
 
 	bgpErrCh := make(chan error, 1)
@@ -199,10 +203,21 @@ func run(cfgPath string) error {
 	)
 	go checker.Run(ctx)
 
+	// ── Web UI ────────────────────────────────────────────────────────────────
+	ui, err := webui.New(cfg.API.APIKey, web.FS)
+	if err != nil {
+		return fmt.Errorf("build web UI: %w", err)
+	}
+
+	// Mount: API at /api/v1/, dashboard at everything else.
+	mux := http.NewServeMux()
+	mux.Handle("/api/v1/", reg.Handler())
+	mux.Handle("/", ui)
+
 	// ── HTTP server ───────────────────────────────────────────────────────────
 	httpSrv := &http.Server{
 		Addr:         cfg.API.Listen,
-		Handler:      reg.Handler(),
+		Handler:      mux,
 		ReadTimeout:  10 * time.Second,
 		WriteTimeout: 10 * time.Second,
 		IdleTimeout:  60 * time.Second,
