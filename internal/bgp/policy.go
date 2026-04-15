@@ -1,19 +1,21 @@
 // policy.go configures GoBGP import/export policies on the core router.
 //
+// GoBGP v3.26 API notes (differs from older docs):
+//   - PolicyAssignment.DefaultAction is RouteAction (not DefaultPolicyType)
+//   - ApplyPolicy has InPolicy/ExportPolicy/ImportPolicy (*PolicyAssignment)
+//   - No ApplyPolicyConfig wrapper type exists
+//
 // Policy architecture:
 //
-//   IMPORT (from node peers → Local RIB):
-//     - Accept only prefixes that fall within the aggregate /24.
-//     - Accept only /26 and /27 prefix lengths (configurable via SubnetBits).
-//     - Reject everything else.
+//	IMPORT (peer → Local RIB):
+//	  Accept only prefixes that fall within the aggregate /24 at exactly
+//	  SubnetBits length (/26 or /27). Reject everything else.
 //
-//   EXPORT (Local RIB → upstream ISP peers):
-//     - Announce only the aggregate /24.
-//     - Never leak node /26 routes to the upstream.
+//	EXPORT (Local RIB → upstream ISP peers):
+//	  Announce only the aggregate /24. Never leak node /26 routes upstream.
 //
-//   EXPORT (Local RIB → node peers):
-//     - Not restricted (nodes may learn a default route or summary if needed).
-//     - This policy is left as "accept all" and can be extended later.
+//	EXPORT (Local RIB → node peers):
+//	  Left as accept-all (nodes may receive a default route if desired).
 package bgp
 
 import (
@@ -52,30 +54,14 @@ func (pm *PolicyManager) Apply(ctx context.Context) error {
 	if err := pm.addPolicies(ctx); err != nil {
 		return fmt.Errorf("add policies: %w", err)
 	}
-	if err := pm.assignPolicies(ctx); err != nil {
-		return fmt.Errorf("assign policies: %w", err)
+	if err := pm.assignGlobalImport(ctx); err != nil {
+		return fmt.Errorf("assign global import policy: %w", err)
 	}
 	pm.log.Info("BGP policies applied",
 		zap.String("aggregate", pm.aggregatePrefix),
 		zap.Int("subnet_bits", pm.subnetBits),
 	)
 	return nil
-}
-
-// ApplyUpstreamExportPolicy assigns the aggregate-only export policy to a
-// specific upstream peer. Call after AddPeer for each upstream.
-func (pm *PolicyManager) ApplyUpstreamExportPolicy(ctx context.Context, peerAddr string) error {
-	return pm.srv.AddPeerGroup(ctx, &api.AddPeerGroupRequest{
-		PeerGroup: &api.PeerGroup{
-			Conf: &api.PeerGroupConf{PeerGroupName: "upstream"},
-			ApplyPolicy: &api.ApplyPolicy{
-				Config: &api.ApplyPolicyConfig{
-					ExportPolicyNames:     []string{"export-aggregate-only"},
-					DefaultExportPolicy:   api.DefaultPolicyType_REJECT_ROUTE,
-				},
-			},
-		},
-	})
 }
 
 // ─── Prefix sets ──────────────────────────────────────────────────────────────
@@ -87,33 +73,29 @@ func (pm *PolicyManager) addPrefixSets(ctx context.Context) error {
 	}
 	aggBits, _ := aggNet.Mask.Size()
 
-	// "node-subnets": prefixes within the aggregate at exactly subnetBits length.
+	// "node-subnets": prefixes inside the aggregate at exactly subnetBits length.
 	nodePfxSet := &api.DefinedSet{
 		DefinedType: api.DefinedType_PREFIX,
 		Name:        "node-subnets",
-		Prefixes: []*api.Prefix{
-			{
-				IpPrefix:      pm.aggregatePrefix,
-				MaskLengthMin: uint32(pm.subnetBits),
-				MaskLengthMax: uint32(pm.subnetBits),
-			},
-		},
+		Prefixes: []*api.Prefix{{
+			IpPrefix:      pm.aggregatePrefix,
+			MaskLengthMin: uint32(pm.subnetBits),
+			MaskLengthMax: uint32(pm.subnetBits),
+		}},
 	}
 	if err := pm.srv.AddDefinedSet(ctx, &api.AddDefinedSetRequest{DefinedSet: nodePfxSet}); err != nil {
 		return fmt.Errorf("add node-subnets prefix set: %w", err)
 	}
 
-	// "aggregate-only": the exact /N aggregate.
+	// "aggregate-only": the exact /N aggregate (for upstream export).
 	aggPfxSet := &api.DefinedSet{
 		DefinedType: api.DefinedType_PREFIX,
 		Name:        "aggregate-only",
-		Prefixes: []*api.Prefix{
-			{
-				IpPrefix:      pm.aggregatePrefix,
-				MaskLengthMin: uint32(aggBits),
-				MaskLengthMax: uint32(aggBits),
-			},
-		},
+		Prefixes: []*api.Prefix{{
+			IpPrefix:      pm.aggregatePrefix,
+			MaskLengthMin: uint32(aggBits),
+			MaskLengthMax: uint32(aggBits),
+		}},
 	}
 	if err := pm.srv.AddDefinedSet(ctx, &api.AddDefinedSetRequest{DefinedSet: aggPfxSet}); err != nil {
 		return fmt.Errorf("add aggregate-only prefix set: %w", err)
@@ -125,52 +107,48 @@ func (pm *PolicyManager) addPrefixSets(ctx context.Context) error {
 // ─── Policies ─────────────────────────────────────────────────────────────────
 
 func (pm *PolicyManager) addPolicies(ctx context.Context) error {
-	// import-from-nodes: accept /subnetBits routes within our aggregate.
+	// import-from-nodes: accept /subnetBits routes within the aggregate.
 	importPolicy := &api.Policy{
 		Name: "import-from-nodes",
-		Statements: []*api.Statement{
-			{
-				Name: "accept-node-subnets",
-				Conditions: &api.Conditions{
-					PrefixSet: &api.MatchSet{
-						Name: "node-subnets",
-						Type: api.MatchSet_ANY,
-					},
-				},
-				Actions: &api.Actions{
-					RouteAction: api.RouteAction_ACCEPT,
+		Statements: []*api.Statement{{
+			Name: "accept-node-subnets",
+			Conditions: &api.Conditions{
+				PrefixSet: &api.MatchSet{
+					Name: "node-subnets",
+					Type: api.MatchSet_ANY,
 				},
 			},
-		},
+			Actions: &api.Actions{
+				RouteAction: api.RouteAction_ACCEPT,
+			},
+		}},
 	}
 	if err := pm.srv.AddPolicy(ctx, &api.AddPolicyRequest{
 		Policy:                  importPolicy,
-		ReferExistingDefinedSet: true,
+		ReferExistingStatements: false,
 	}); err != nil {
 		return fmt.Errorf("add import-from-nodes policy: %w", err)
 	}
 
-	// export-aggregate-only: announce only the /24 aggregate upstream.
+	// export-aggregate-only: only announce the /24 aggregate to upstream peers.
 	exportPolicy := &api.Policy{
 		Name: "export-aggregate-only",
-		Statements: []*api.Statement{
-			{
-				Name: "allow-aggregate",
-				Conditions: &api.Conditions{
-					PrefixSet: &api.MatchSet{
-						Name: "aggregate-only",
-						Type: api.MatchSet_ANY,
-					},
-				},
-				Actions: &api.Actions{
-					RouteAction: api.RouteAction_ACCEPT,
+		Statements: []*api.Statement{{
+			Name: "allow-aggregate",
+			Conditions: &api.Conditions{
+				PrefixSet: &api.MatchSet{
+					Name: "aggregate-only",
+					Type: api.MatchSet_ANY,
 				},
 			},
-		},
+			Actions: &api.Actions{
+				RouteAction: api.RouteAction_ACCEPT,
+			},
+		}},
 	}
 	if err := pm.srv.AddPolicy(ctx, &api.AddPolicyRequest{
 		Policy:                  exportPolicy,
-		ReferExistingDefinedSet: true,
+		ReferExistingStatements: false,
 	}); err != nil {
 		return fmt.Errorf("add export-aggregate-only policy: %w", err)
 	}
@@ -180,32 +158,29 @@ func (pm *PolicyManager) addPolicies(ctx context.Context) error {
 
 // ─── Policy assignment ────────────────────────────────────────────────────────
 
-func (pm *PolicyManager) assignPolicies(ctx context.Context) error {
-	// Global import policy: only accept node-subnet routes from all peers.
-	// This is applied to the global table (affects all peers' imports).
-	err := pm.srv.SetPolicyAssignment(ctx, &api.SetPolicyAssignmentRequest{
+// assignGlobalImport sets the global import policy so only node subnets enter
+// the Local RIB. DefaultAction is RouteAction_REJECT (v3.26 API).
+func (pm *PolicyManager) assignGlobalImport(ctx context.Context) error {
+	return pm.srv.SetPolicyAssignment(ctx, &api.SetPolicyAssignmentRequest{
 		Assignment: &api.PolicyAssignment{
 			Name:          "",
 			Direction:     api.PolicyDirection_IMPORT,
 			Policies:      []*api.Policy{{Name: "import-from-nodes"}},
-			DefaultAction: api.DefaultPolicyType_REJECT_ROUTE,
+			DefaultAction: api.RouteAction_REJECT,
 		},
 	})
-	if err != nil {
-		return fmt.Errorf("assign import policy: %w", err)
-	}
-	return nil
 }
 
-// AddUpstreamExportPolicy assigns the export-aggregate-only policy to a peer.
-// Must be called before or after AddPeer for the upstream.
+// AddUpstreamExportPolicy assigns the export-aggregate-only policy to a
+// specific upstream peer (per-peer export policy, reject everything else).
+// Call after AddPeer for each upstream.
 func AddUpstreamExportPolicy(ctx context.Context, srv *server.BgpServer, peerAddr string) error {
 	return srv.SetPolicyAssignment(ctx, &api.SetPolicyAssignmentRequest{
 		Assignment: &api.PolicyAssignment{
 			Name:          peerAddr,
 			Direction:     api.PolicyDirection_EXPORT,
 			Policies:      []*api.Policy{{Name: "export-aggregate-only"}},
-			DefaultAction: api.DefaultPolicyType_REJECT_ROUTE,
+			DefaultAction: api.RouteAction_REJECT,
 		},
 	})
 }

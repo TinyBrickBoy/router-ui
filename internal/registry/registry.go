@@ -314,7 +314,7 @@ func (r *Registry) handleRegister(w http.ResponseWriter, req *http.Request) {
 			r.log.Error("Failed to add BGP peer", zap.String("node_id", regReq.NodeID), zap.Error(err))
 		}
 		if r.callbacks.OnNodeUp != nil {
-			if err := r.callbacks.OnNodeUp(regReq.NodeID, wgIP.String(), regReq.ASN); err != nil {
+			if err := r.callbacks.OnNodeUp(regReq.NodeID, wgIP.String(), r.coreASN); err != nil {
 				r.log.Error("OnNodeUp callback failed", zap.Error(err))
 			}
 		}
@@ -322,7 +322,7 @@ func (r *Registry) handleRegister(w http.ResponseWriter, req *http.Request) {
 
 	r.log.Info("Node registered",
 		zap.String("node_id", regReq.NodeID),
-		zap.Uint32("asn", regReq.ASN),
+		zap.Uint32("asn", r.coreASN),
 		zap.String("wg_ip", wgIP.String()),
 		zap.String("subnet", assignedSubnet.String()),
 	)
