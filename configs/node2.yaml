@@ -1,0 +1,26 @@
+# ─── bgpd-agent configuration — Node 2 ───────────────────────────────────────
+# Datacenter: DC2 / Provider B
+# Assigned at runtime: 203.0.113.64/26  WG IP: 10.100.0.3
+
+log_level: info
+
+node_id: "node2"
+asn: 65002
+
+core:
+  public_ip: "YOUR_CORE_PUBLIC_IP"
+  api_port: 8080
+  api_key: "YOUR_SECRET_API_KEY_HERE"
+
+wireguard:
+  interface: "wg0"
+  public_ip: "YOUR_NODE2_PUBLIC_IP"  # e.g. 203.0.113.74
+  listen_port: 51820
+  mtu: 1420
+  private_key: ""   # generated on first run
+
+bgp:
+  hold_time: 90
+  keepalive: 30
+
+heartbeat_interval: "30s"

@@ -1,0 +1,65 @@
+# ─── bgpd-core configuration ──────────────────────────────────────────────────
+# Replace all placeholder values (YOUR_*) before deploying.
+
+log_level: info  # debug | info | warn | error
+
+# ─── BGP ──────────────────────────────────────────────────────────────────────
+bgp:
+  asn: 65000
+  router_id: "10.100.0.1"       # WireGuard IP of the core (used as BGP router-id)
+  listen_addr: "10.100.0.1"     # bind BGP only on the WireGuard interface
+  listen_port: 179
+  hold_time: 90                  # seconds
+  keepalive: 30                  # seconds
+
+  # Upstream ISP eBGP peers — add your actual transit/route-server details.
+  upstreams:
+    - name: "transit-isp"
+      address: "YOUR_ISP_PEER_IP"   # e.g. 198.51.100.1
+      asn: YOUR_ISP_ASN             # e.g. 12345
+      password: ""                   # MD5 auth; leave empty to disable
+
+# ─── WireGuard ────────────────────────────────────────────────────────────────
+wireguard:
+  interface: "wg-core"
+  listen_port: 51820
+  # Generate with: wg genkey
+  private_key: "YOUR_CORE_WG_PRIVATE_KEY_BASE64"
+  # IP address on the WireGuard interface. Must be the first host in wg_peer_range.
+  address: "10.100.0.1/24"
+  mtu: 1420
+
+# ─── Network / addressing plan ────────────────────────────────────────────────
+network:
+  # The /24 block your ASN owns. This is announced to the upstream ISP.
+  aggregate_prefix: "203.0.113.0/24"
+
+  # Node subnet size: 26 → /26 (4 nodes max from /24), 27 → /27 (8 nodes max).
+  subnet_bits: 26
+
+  # WireGuard management IP range (NOT publicly routed).
+  wg_peer_range: "10.100.0.0/24"
+
+  # Core's WireGuard IP — must match wireguard.address above.
+  wg_core_ip: "10.100.0.1"
+
+# ─── HTTP control-plane API ───────────────────────────────────────────────────
+api:
+  # Listen on all interfaces so node agents can reach it before WG tunnel is up.
+  # After initial bootstrapping, firewall this to your WireGuard range.
+  listen: "0.0.0.0:8080"
+
+  # TLS (strongly recommended for production).
+  # tls_cert: "/etc/bgpd/tls/core.crt"
+  # tls_key:  "/etc/bgpd/tls/core.key"
+
+  # Shared secret — node agents must present this in X-API-Key header.
+  # Generate with: openssl rand -hex 32
+  api_key: "YOUR_SECRET_API_KEY_HERE"
+
+# ─── Health monitoring ────────────────────────────────────────────────────────
+health:
+  # Node is marked down after this long without a heartbeat.
+  heartbeat_timeout: "90s"
+  # How often to sweep the node list.
+  check_interval: "15s"
