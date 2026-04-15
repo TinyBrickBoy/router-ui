@@ -1,0 +1,619 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BGP Router UI</title>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+
+:root{
+  --bg:#0d1117;
+  --surface:#161b22;
+  --surface2:#21262d;
+  --border:#30363d;
+  --text:#c9d1d9;
+  --text-dim:#8b949e;
+  --text-bright:#f0f6fc;
+  --accent:#58a6ff;
+  --accent-dim:#1f6feb;
+  --green:#3fb950;
+  --green-bg:#0f2d18;
+  --yellow:#d29922;
+  --yellow-bg:#2d2200;
+  --red:#f85149;
+  --red-bg:#2d0f0d;
+  --purple:#bc8cff;
+  --font:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;
+  --mono:'SFMono-Regular',Consolas,'Liberation Mono',Menlo,monospace;
+  --radius:6px;
+  --shadow:0 1px 3px rgba(0,0,0,.4);
+}
+
+body{background:var(--bg);color:var(--text);font-family:var(--font);font-size:14px;line-height:1.5;min-height:100vh}
+
+/* ── Layout ── */
+#app{display:flex;flex-direction:column;min-height:100vh}
+
+header{
+  background:var(--surface);
+  border-bottom:1px solid var(--border);
+  padding:0 24px;
+  height:56px;
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  position:sticky;top:0;z-index:100;
+}
+.logo{display:flex;align-items:center;gap:10px;font-weight:600;font-size:15px;color:var(--text-bright)}
+.logo svg{width:22px;height:22px;flex-shrink:0}
+.header-right{display:flex;align-items:center;gap:16px}
+
+#system-badge{
+  display:flex;align-items:center;gap:6px;
+  font-size:12px;color:var(--text-dim);
+  padding:4px 10px;border-radius:20px;
+  background:var(--surface2);border:1px solid var(--border);
+}
+#system-dot{width:8px;height:8px;border-radius:50%;background:var(--text-dim);flex-shrink:0;transition:background .3s}
+#system-dot.ok{background:var(--green);box-shadow:0 0 6px var(--green)}
+#system-dot.warn{background:var(--yellow)}
+#system-dot.err{background:var(--red)}
+
+#refresh-label{font-size:11px;color:var(--text-dim)}
+
+nav{
+  background:var(--surface);
+  border-bottom:1px solid var(--border);
+  padding:0 24px;
+  display:flex;gap:0;
+}
+.tab{
+  padding:10px 18px;
+  font-size:13px;font-weight:500;
+  color:var(--text-dim);
+  cursor:pointer;
+  border-bottom:2px solid transparent;
+  transition:color .15s,border-color .15s;
+  user-select:none;
+}
+.tab:hover{color:var(--text)}
+.tab.active{color:var(--accent);border-bottom-color:var(--accent)}
+
+main{flex:1;padding:24px;max-width:1200px;width:100%;margin:0 auto}
+
+/* ── Cards ── */
+.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:16px;margin-bottom:24px}
+.card{
+  background:var(--surface);
+  border:1px solid var(--border);
+  border-radius:var(--radius);
+  padding:18px 20px;
+  box-shadow:var(--shadow);
+}
+.card-label{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.6px;color:var(--text-dim);margin-bottom:8px}
+.card-value{font-size:28px;font-weight:700;color:var(--text-bright);font-variant-numeric:tabular-nums}
+.card-value.green{color:var(--green)}
+.card-value.red{color:var(--red)}
+.card-value.yellow{color:var(--yellow)}
+.card-value.accent{color:var(--accent)}
+.card-sub{font-size:11px;color:var(--text-dim);margin-top:4px}
+
+/* ── Section ── */
+.section-header{
+  display:flex;align-items:center;justify-content:space-between;
+  margin-bottom:14px;
+}
+.section-title{font-size:15px;font-weight:600;color:var(--text-bright)}
+.section-meta{font-size:12px;color:var(--text-dim)}
+
+/* ── Table ── */
+.table-wrap{
+  background:var(--surface);
+  border:1px solid var(--border);
+  border-radius:var(--radius);
+  overflow:hidden;
+  box-shadow:var(--shadow);
+}
+table{width:100%;border-collapse:collapse;font-size:13px}
+thead tr{background:var(--surface2);border-bottom:1px solid var(--border)}
+th{
+  padding:10px 14px;
+  text-align:left;
+  font-size:11px;font-weight:600;
+  text-transform:uppercase;letter-spacing:.5px;
+  color:var(--text-dim);white-space:nowrap;
+}
+td{
+  padding:11px 14px;
+  border-bottom:1px solid var(--border);
+  color:var(--text);
+  vertical-align:middle;
+}
+tbody tr:last-child td{border-bottom:none}
+tbody tr:hover td{background:var(--surface2)}
+.mono{font-family:var(--mono);font-size:12px}
+
+/* ── Badges ── */
+.badge{
+  display:inline-flex;align-items:center;gap:5px;
+  padding:2px 9px;border-radius:20px;
+  font-size:11px;font-weight:600;white-space:nowrap;
+}
+.badge::before{content:'';width:6px;height:6px;border-radius:50%;flex-shrink:0}
+.badge.active{background:var(--green-bg);color:var(--green)}
+.badge.active::before{background:var(--green)}
+.badge.down{background:var(--red-bg);color:var(--red)}
+.badge.down::before{background:var(--red)}
+.badge.pending{background:var(--yellow-bg);color:var(--yellow)}
+.badge.pending::before{background:var(--yellow)}
+
+.bool-yes{color:var(--green);font-size:12px}
+.bool-no{color:var(--red);font-size:12px}
+
+/* ── Buttons ── */
+.btn{
+  padding:5px 12px;border-radius:var(--radius);
+  font-size:12px;font-weight:500;
+  cursor:pointer;border:1px solid;
+  transition:opacity .15s,background .15s;
+  display:inline-flex;align-items:center;gap:6px;
+}
+.btn:hover{opacity:.8}
+.btn-danger{background:var(--red-bg);color:var(--red);border-color:var(--red)}
+.btn-sm{padding:3px 8px;font-size:11px}
+
+/* ── Subnet map ── */
+.subnet-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:14px}
+.subnet-card{
+  background:var(--surface);border:1px solid var(--border);
+  border-radius:var(--radius);padding:16px 18px;
+  box-shadow:var(--shadow);
+}
+.subnet-card.active-node{border-color:var(--green-bg)}
+.subnet-card.down-node{border-color:var(--red-bg)}
+.subnet-prefix{font-family:var(--mono);font-size:16px;font-weight:600;color:var(--text-bright);margin-bottom:6px}
+.subnet-detail{font-size:12px;color:var(--text-dim);display:flex;flex-direction:column;gap:3px}
+.subnet-free{color:var(--text-dim);font-style:italic}
+
+/* ── Empty state ── */
+.empty{
+  padding:48px 24px;text-align:center;
+  color:var(--text-dim);font-size:13px;
+}
+
+/* ── Tab panels ── */
+.panel{display:none}
+.panel.active{display:block}
+
+/* ── Aggregate bar ── */
+.agg-bar{
+  background:var(--surface);border:1px solid var(--border);
+  border-radius:var(--radius);padding:14px 20px;
+  margin-bottom:20px;
+  display:flex;align-items:center;gap:16px;
+  font-size:13px;
+}
+.agg-prefix{font-family:var(--mono);font-size:15px;font-weight:600;color:var(--accent)}
+.agg-sep{color:var(--border);font-size:18px}
+.agg-meta{color:var(--text-dim)}
+.agg-meta span{color:var(--text)}
+
+/* ── Toast ── */
+#toast{
+  position:fixed;bottom:24px;right:24px;
+  background:var(--surface2);border:1px solid var(--border);
+  border-radius:var(--radius);padding:10px 16px;
+  font-size:13px;color:var(--text);
+  box-shadow:0 4px 12px rgba(0,0,0,.5);
+  opacity:0;transform:translateY(8px);
+  transition:opacity .25s,transform .25s;
+  pointer-events:none;z-index:9999;
+  max-width:320px;
+}
+#toast.show{opacity:1;transform:translateY(0)}
+#toast.ok{border-left:3px solid var(--green)}
+#toast.err{border-left:3px solid var(--red)}
+
+/* ── Spinner ── */
+.spin{display:inline-block;width:14px;height:14px;border:2px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin .6s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* ── Confirm dialog ── */
+#confirm-overlay{
+  display:none;position:fixed;inset:0;
+  background:rgba(0,0,0,.7);z-index:200;
+  align-items:center;justify-content:center;
+}
+#confirm-overlay.show{display:flex}
+#confirm-box{
+  background:var(--surface);border:1px solid var(--border);
+  border-radius:8px;padding:24px;width:360px;
+  box-shadow:0 8px 32px rgba(0,0,0,.6);
+}
+#confirm-box h3{font-size:15px;font-weight:600;color:var(--text-bright);margin-bottom:8px}
+#confirm-box p{font-size:13px;color:var(--text-dim);margin-bottom:20px}
+#confirm-box .actions{display:flex;gap:10px;justify-content:flex-end}
+</style>
+</head>
+<body>
+<div id="app">
+
+<header>
+  <div class="logo">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/>
+      <line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/>
+    </svg>
+    BGP Router UI
+  </div>
+  <div class="header-right">
+    <span id="refresh-label">—</span>
+    <div id="system-badge">
+      <div id="system-dot"></div>
+      <span id="system-text">connecting…</span>
+    </div>
+  </div>
+</header>
+
+<nav>
+  <div class="tab active" data-tab="dashboard">Dashboard</div>
+  <div class="tab" data-tab="nodes">Nodes</div>
+  <div class="tab" data-tab="routes">Routes</div>
+  <div class="tab" data-tab="subnets">Subnets</div>
+</nav>
+
+<main>
+
+  <!-- ── Dashboard ── -->
+  <div class="panel active" id="tab-dashboard">
+    <div class="cards">
+      <div class="card">
+        <div class="card-label">Aggregate Prefix</div>
+        <div class="card-value accent" id="d-aggregate" style="font-size:18px;margin-top:4px">—</div>
+        <div class="card-sub" id="d-version"></div>
+      </div>
+      <div class="card">
+        <div class="card-label">Total Nodes</div>
+        <div class="card-value" id="d-total">—</div>
+      </div>
+      <div class="card">
+        <div class="card-label">Active</div>
+        <div class="card-value green" id="d-active">—</div>
+      </div>
+      <div class="card">
+        <div class="card-label">Down</div>
+        <div class="card-value red" id="d-down">—</div>
+      </div>
+      <div class="card">
+        <div class="card-label">BGP Routes</div>
+        <div class="card-value accent" id="d-routes">—</div>
+        <div class="card-sub">in RIB</div>
+      </div>
+    </div>
+
+    <div class="section-header">
+      <div class="section-title">Node Overview</div>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr>
+          <th>Node</th><th>WG IP</th><th>Subnet</th>
+          <th>State</th><th>BGP</th><th>Last Heartbeat</th>
+        </tr></thead>
+        <tbody id="dash-nodes-body">
+          <tr><td colspan="6" class="empty"><span class="spin"></span></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ── Nodes ── -->
+  <div class="panel" id="tab-nodes">
+    <div class="section-header">
+      <div class="section-title">Registered Nodes</div>
+      <div class="section-meta" id="nodes-meta"></div>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr>
+          <th>Node ID</th><th>ASN</th><th>WG IP</th><th>Public IP</th>
+          <th>Subnet</th><th>State</th><th>BGP Up</th>
+          <th>Last Heartbeat</th><th></th>
+        </tr></thead>
+        <tbody id="nodes-body">
+          <tr><td colspan="9" class="empty"><span class="spin"></span></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ── Routes ── -->
+  <div class="panel" id="tab-routes">
+    <div class="section-header">
+      <div class="section-title">BGP Route Table (RIB)</div>
+      <div class="section-meta" id="routes-meta"></div>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr>
+          <th>Prefix</th><th>Next Hop</th><th>Source</th><th>Best</th>
+        </tr></thead>
+        <tbody id="routes-body">
+          <tr><td colspan="4" class="empty"><span class="spin"></span></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ── Subnets ── -->
+  <div class="panel" id="tab-subnets">
+    <div class="section-header">
+      <div class="section-title">Subnet Allocation</div>
+      <div class="section-meta" id="subnets-meta"></div>
+    </div>
+    <div id="subnet-grid" class="subnet-grid">
+      <div class="empty"><span class="spin"></span></div>
+    </div>
+  </div>
+
+</main>
+</div>
+
+<!-- ── Confirm Dialog ── -->
+<div id="confirm-overlay">
+  <div id="confirm-box">
+    <h3 id="confirm-title">Confirm Action</h3>
+    <p id="confirm-msg"></p>
+    <div class="actions">
+      <button class="btn" id="confirm-cancel">Cancel</button>
+      <button class="btn btn-danger" id="confirm-ok">Delete</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Toast ── -->
+<div id="toast"></div>
+
+<script>
+'use strict';
+
+// ── Configuration (injected by Go template) ──────────────────────────────────
+const API_KEY  = '{{.APIKey}}';
+const API_BASE = '/api/v1';
+
+// ── State ─────────────────────────────────────────────────────────────────────
+let nodes  = [];
+let routes = [];
+let status = null;
+let lastUpdated = null;
+
+// ── API ───────────────────────────────────────────────────────────────────────
+async function apiFetch(path, opts = {}) {
+  const res = await fetch(API_BASE + path, {
+    ...opts,
+    headers: { 'X-API-Key': API_KEY, 'Content-Type': 'application/json', ...(opts.headers||{}) },
+  });
+  if (!res.ok) {
+    let msg = `HTTP ${res.status}`;
+    try { const j = await res.json(); msg = j.error || msg; } catch(_) {}
+    throw new Error(msg);
+  }
+  if (res.status === 204) return null;
+  return res.json();
+}
+
+// ── Data refresh ──────────────────────────────────────────────────────────────
+async function refresh() {
+  try {
+    const [s, n, r] = await Promise.all([
+      apiFetch('/status'),
+      apiFetch('/nodes'),
+      apiFetch('/routes'),
+    ]);
+    status = s;
+    nodes  = n.nodes  || [];
+    routes = r.routes || [];
+    lastUpdated = new Date();
+    renderAll();
+    setSystemBadge(s);
+    document.getElementById('refresh-label').textContent =
+      'Updated ' + lastUpdated.toLocaleTimeString();
+  } catch (err) {
+    setSystemBadge(null, err.message);
+  }
+}
+
+// ── Renderers ─────────────────────────────────────────────────────────────────
+
+function renderAll() {
+  renderDashboard();
+  renderNodes();
+  renderRoutes();
+  renderSubnets();
+}
+
+function renderDashboard() {
+  if (!status) return;
+  el('d-aggregate').textContent = status.aggregate_prefix || '—';
+  el('d-version').textContent   = 'v' + (status.version || '?');
+  el('d-total').textContent     = status.nodes_total;
+  el('d-active').textContent    = status.nodes_active;
+  el('d-down').textContent      = status.nodes_down;
+  el('d-routes').textContent    = routes.length;
+
+  const tbody = el('dash-nodes-body');
+  if (!nodes.length) { tbody.innerHTML = '<tr><td colspan="6" class="empty">No nodes registered yet.</td></tr>'; return; }
+  tbody.innerHTML = nodes.map(n => `
+    <tr>
+      <td><strong>${esc(n.node_id)}</strong></td>
+      <td class="mono">${esc(n.wg_ip)}</td>
+      <td class="mono">${esc(n.assigned_subnet)}</td>
+      <td>${stateBadge(n.state)}</td>
+      <td>${boolIcon(n.bgp_session_up)}</td>
+      <td>${hbAge(n.last_heartbeat)}</td>
+    </tr>`).join('');
+}
+
+function renderNodes() {
+  const tbody = el('nodes-body');
+  el('nodes-meta').textContent = nodes.length + ' node' + (nodes.length !== 1 ? 's' : '');
+  if (!nodes.length) { tbody.innerHTML = '<tr><td colspan="9" class="empty">No nodes registered.</td></tr>'; return; }
+  tbody.innerHTML = nodes.map(n => `
+    <tr>
+      <td><strong>${esc(n.node_id)}</strong></td>
+      <td class="mono">${n.asn || '—'}</td>
+      <td class="mono">${esc(n.wg_ip)}</td>
+      <td class="mono">${esc(n.public_ip)}</td>
+      <td class="mono">${esc(n.assigned_subnet)}</td>
+      <td>${stateBadge(n.state)}</td>
+      <td>${boolIcon(n.bgp_session_up)}</td>
+      <td>${hbAge(n.last_heartbeat)}</td>
+      <td>
+        <button class="btn btn-danger btn-sm" onclick="confirmDelete('${esc(n.node_id)}')">
+          Delete
+        </button>
+      </td>
+    </tr>`).join('');
+}
+
+function renderRoutes() {
+  const tbody = el('routes-body');
+  el('routes-meta').textContent = routes.length + ' route' + (routes.length !== 1 ? 's' : '');
+  if (!routes.length) { tbody.innerHTML = '<tr><td colspan="4" class="empty">RIB is empty.</td></tr>'; return; }
+  tbody.innerHTML = routes.map(r => `
+    <tr>
+      <td class="mono">${esc(r.prefix)}</td>
+      <td class="mono">${esc(r.next_hop || '—')}</td>
+      <td><span class="badge pending">${esc(r.source)}</span></td>
+      <td>${boolIcon(r.active)}</td>
+    </tr>`).join('');
+}
+
+function renderSubnets() {
+  const grid = el('subnet-grid');
+  el('subnets-meta').textContent = nodes.length + ' / ? allocated';
+  if (!nodes.length) { grid.innerHTML = '<div class="empty">No subnets allocated yet.</div>'; return; }
+  grid.innerHTML = nodes.map(n => {
+    const cls = n.state === 'active' ? 'active-node' : n.state === 'down' ? 'down-node' : '';
+    return `
+      <div class="subnet-card ${cls}">
+        <div class="subnet-prefix">${esc(n.assigned_subnet)}</div>
+        <div class="subnet-detail">
+          <span>${stateBadge(n.state)}</span>
+          <span>Node: <strong>${esc(n.node_id)}</strong></span>
+          <span>WG IP: <span class="mono">${esc(n.wg_ip)}</span></span>
+          <span>Endpoint: <span class="mono">${esc(n.public_ip)}</span></span>
+        </div>
+      </div>`;
+  }).join('');
+}
+
+// ── Node delete ───────────────────────────────────────────────────────────────
+let pendingDelete = null;
+
+function confirmDelete(nodeID) {
+  pendingDelete = nodeID;
+  el('confirm-title').textContent = 'Delete Node';
+  el('confirm-msg').textContent   =
+    `Remove "${nodeID}" from the routing fabric? Its BGP session will be torn down and routes withdrawn immediately.`;
+  el('confirm-overlay').classList.add('show');
+}
+
+el('confirm-cancel').onclick = () => {
+  el('confirm-overlay').classList.remove('show');
+  pendingDelete = null;
+};
+
+el('confirm-ok').onclick = async () => {
+  if (!pendingDelete) return;
+  const id = pendingDelete;
+  el('confirm-overlay').classList.remove('show');
+  pendingDelete = null;
+  try {
+    await apiFetch('/nodes/' + encodeURIComponent(id), { method: 'DELETE' });
+    toast('Node "' + id + '" deleted.', 'ok');
+    await refresh();
+  } catch (err) {
+    toast('Delete failed: ' + err.message, 'err');
+  }
+};
+
+// ── System badge ──────────────────────────────────────────────────────────────
+function setSystemBadge(s, errMsg) {
+  const dot  = el('system-dot');
+  const text = el('system-text');
+  if (errMsg) {
+    dot.className = 'err';
+    text.textContent = 'Error';
+    return;
+  }
+  if (!s) { dot.className = ''; text.textContent = 'connecting…'; return; }
+  if (s.nodes_down > 0) {
+    dot.className = 'warn';
+    text.textContent = s.nodes_down + ' node' + (s.nodes_down > 1 ? 's' : '') + ' down';
+  } else if (s.ok) {
+    dot.className = 'ok';
+    text.textContent = 'All systems OK';
+  } else {
+    dot.className = 'warn';
+    text.textContent = 'Degraded';
+  }
+}
+
+// ── Tab switching ─────────────────────────────────────────────────────────────
+document.querySelectorAll('.tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+    tab.classList.add('active');
+    el('tab-' + tab.dataset.tab).classList.add('active');
+  });
+});
+
+// ── Toast ─────────────────────────────────────────────────────────────────────
+let toastTimer = null;
+function toast(msg, type = 'ok') {
+  const t = el('toast');
+  t.textContent = msg;
+  t.className   = 'show ' + type;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { t.className = ''; }, 3500);
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+function el(id) { return document.getElementById(id); }
+
+function esc(s) {
+  if (!s) return '';
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function stateBadge(state) {
+  const cls = state === 'active' ? 'active' : state === 'down' ? 'down' : 'pending';
+  return `<span class="badge ${cls}">${esc(state)}</span>`;
+}
+
+function boolIcon(b) {
+  return b
+    ? '<span class="bool-yes">✓</span>'
+    : '<span class="bool-no">✗</span>';
+}
+
+function hbAge(ts) {
+  if (!ts) return '—';
+  const d = new Date(ts);
+  if (isNaN(d)) return '—';
+  const secs = Math.floor((Date.now() - d) / 1000);
+  if (secs < 5)   return '<span style="color:var(--green)">just now</span>';
+  if (secs < 90)  return secs + 's ago';
+  if (secs < 3600) return Math.floor(secs / 60) + 'm ago';
+  return Math.floor(secs / 3600) + 'h ago';
+}
+
+// ── Boot ──────────────────────────────────────────────────────────────────────
+refresh();
+setInterval(refresh, 5000);
+</script>
+</body>
+</html>

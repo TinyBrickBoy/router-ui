@@ -11,6 +11,7 @@ import (
 	"sync"
 
 	api "github.com/osrg/gobgp/v3/api"
+	gobgplog "github.com/osrg/gobgp/v3/pkg/log"
 	"github.com/osrg/gobgp/v3/pkg/server"
 	"github.com/vishvananda/netlink"
 	"go.uber.org/zap"
@@ -32,20 +33,11 @@ type SpeakerConfig struct {
 	// Set to "" to disable automatic FIB management.
 	WGInterface string
 
-	// NodeASNRange, if set, limits kernel-route injection to paths whose
-	// AS-PATH origin falls within [Min, Max]. Paths from outside this range
-	// (e.g. upstream transit routes) are not injected.
-	NodeASNRange *ASNRange
-}
-
-// ASNRange is an inclusive range of private ASNs assigned to edge nodes.
-type ASNRange struct {
-	Min, Max uint32
-}
-
-// Contains reports whether asn is in the range.
-func (r *ASNRange) Contains(asn uint32) bool {
-	return asn >= r.Min && asn <= r.Max
+	// WGPeerRange is the WireGuard management CIDR (e.g. "10.100.0.0/24").
+	// Only BGP paths whose NEXT_HOP falls within this range are injected into
+	// the kernel FIB. This filters out upstream/transit routes while accepting
+	// all node-originated prefixes, regardless of ASN (supports single-ASN iBGP).
+	WGPeerRange string
 }
 
 // Speaker embeds a GoBGP server and exposes a simplified routing API.
@@ -134,13 +126,12 @@ func (s *Speaker) AddPeer(ctx context.Context, peerAddr string, peerASN uint32) 
 					},
 				}},
 			},
+			// GracefulRestart: flat struct in v3.26 (no Config wrapper)
 			GracefulRestart: &api.GracefulRestart{
-				Config: &api.GracefulRestartConfig{
-					Enabled:             true,
-					RestartTime:         120,
-					LonglivedEnabled:    false,
-					NotificationEnabled: true,
-				},
+				Enabled:             true,
+				RestartTime:         120,
+				LonglivedEnabled:    false,
+				NotificationEnabled: true,
 			},
 		},
 	})
@@ -279,19 +270,21 @@ func (s *Speaker) Server() *server.BgpServer { return s.server }
 // ─── Best-path watcher / FIB injection ───────────────────────────────────────
 
 func (s *Speaker) watchBestPaths(ctx context.Context) {
+	// v3.26: WatchEventRequest uses Table (not BestPath) for route updates.
+	// An empty Table filter means "watch all best-path changes".
 	err := s.server.WatchEvent(ctx, &api.WatchEventRequest{
-		BestPath: &api.WatchEventRequest_BestPath{},
+		Table: &api.WatchEventRequest_Table{},
 	}, func(r *api.WatchEventResponse) {
-		bp, ok := r.Event.(*api.WatchEventResponse_BestPath)
+		t, ok := r.Event.(*api.WatchEventResponse_Table)
 		if !ok {
 			return
 		}
-		for _, path := range bp.BestPath.Paths {
+		for _, path := range t.Table.Paths {
 			s.handleBestPath(path)
 		}
 	})
 	if err != nil && ctx.Err() == nil {
-		s.log.Error("BGP best-path watcher exited", zap.Error(err))
+		s.log.Error("BGP table watcher exited", zap.Error(err))
 	}
 }
 
@@ -318,35 +311,30 @@ func (s *Speaker) handleBestPath(path *api.Path) {
 		return
 	}
 
-	// Decode next-hop.
+	// Decode next-hop from path attributes.
 	var nextHop net.IP
-	var originASN uint32
 	for _, a := range path.Pattrs {
 		var nh api.NextHopAttribute
 		if err := a.UnmarshalTo(&nh); err == nil {
 			nextHop = net.ParseIP(nh.NextHop).To4()
-			continue
+			break
 		}
-		var asp api.AsPathAttribute
-		if err := a.UnmarshalTo(&asp); err == nil {
-			// Last segment's last ASN is the origin.
-			if len(asp.Segments) > 0 {
-				seg := asp.Segments[len(asp.Segments)-1]
-				if len(seg.Numbers) > 0 {
-					originASN = seg.Numbers[len(seg.Numbers)-1]
-				}
-			}
-		}
-	}
-
-	// Only install routes from node peers (filter by ASN range).
-	if s.cfg.NodeASNRange != nil && !s.cfg.NodeASNRange.Contains(originASN) {
-		return
 	}
 
 	if nextHop == nil {
 		s.log.Warn("FIB: no next-hop in best path", zap.String("prefix", cidr.String()))
 		return
+	}
+
+	// Filter: only inject routes whose next-hop is in the WireGuard peer range.
+	// This works correctly for single-ASN (iBGP) deployments because we
+	// distinguish node routes by next-hop IP, not by ASN.
+	// Upstream/transit routes have next-hops outside the WG range and are skipped.
+	if s.cfg.WGPeerRange != "" {
+		_, wgNet, err := net.ParseCIDR(s.cfg.WGPeerRange)
+		if err == nil && !wgNet.Contains(nextHop) {
+			return // not a node route — skip FIB injection
+		}
 	}
 
 	if err := s.installKernelRoute(cidr, nextHop); err != nil {
@@ -389,20 +377,21 @@ func (s *Speaker) removeKernelRoute(dst *net.IPNet) error {
 
 // ─── GoBGP logger adapter ─────────────────────────────────────────────────────
 
-// zapLogger bridges GoBGP's internal logger interface to zap.
+// zapLogger bridges GoBGP's internal logger interface (gobgplog.Logger) to zap.
+// LogFields and LogLevel live in github.com/osrg/gobgp/v3/pkg/log, not server.
 type zapLogger struct{ l *zap.Logger }
 
-func (z *zapLogger) Panic(msg string, fields server.LogFields)  { z.l.Panic(msg, toZapFields(fields)...) }
-func (z *zapLogger) Fatal(msg string, fields server.LogFields)  { z.l.Fatal(msg, toZapFields(fields)...) }
-func (z *zapLogger) Error(msg string, fields server.LogFields)  { z.l.Error(msg, toZapFields(fields)...) }
-func (z *zapLogger) Warn(msg string, fields server.LogFields)   { z.l.Warn(msg, toZapFields(fields)...) }
-func (z *zapLogger) Info(msg string, fields server.LogFields)   { z.l.Info(msg, toZapFields(fields)...) }
-func (z *zapLogger) Debug(msg string, fields server.LogFields)  { z.l.Debug(msg, toZapFields(fields)...) }
-func (z *zapLogger) Trace(msg string, fields server.LogFields)  { z.l.Debug(msg, toZapFields(fields)...) }
-func (z *zapLogger) GetLevel() server.LogLevel                  { return server.LogLevel(0) }
-func (z *zapLogger) SetLevel(level server.LogLevel)             {}
+func (z *zapLogger) Panic(msg string, fields gobgplog.Fields) { z.l.Panic(msg, toZapFields(fields)...) }
+func (z *zapLogger) Fatal(msg string, fields gobgplog.Fields) { z.l.Fatal(msg, toZapFields(fields)...) }
+func (z *zapLogger) Error(msg string, fields gobgplog.Fields) { z.l.Error(msg, toZapFields(fields)...) }
+func (z *zapLogger) Warn(msg string, fields gobgplog.Fields)  { z.l.Warn(msg, toZapFields(fields)...) }
+func (z *zapLogger) Info(msg string, fields gobgplog.Fields)  { z.l.Info(msg, toZapFields(fields)...) }
+func (z *zapLogger) Debug(msg string, fields gobgplog.Fields) { z.l.Debug(msg, toZapFields(fields)...) }
+func (z *zapLogger) Trace(msg string, fields gobgplog.Fields) { z.l.Debug(msg, toZapFields(fields)...) }
+func (z *zapLogger) GetLevel() gobgplog.LogLevel              { return gobgplog.LogLevel(0) }
+func (z *zapLogger) SetLevel(_ gobgplog.LogLevel)             {}
 
-func toZapFields(fields server.LogFields) []zap.Field {
+func toZapFields(fields gobgplog.Fields) []zap.Field {
 	out := make([]zap.Field, 0, len(fields))
 	for k, v := range fields {
 		out = append(out, zap.Any(k, v))
